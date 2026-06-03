@@ -43,6 +43,12 @@
 #define NGX_QUIC_STREAM_SERVER_INITIATED     0x01
 #define NGX_QUIC_STREAM_UNIDIRECTIONAL       0x02
 
+#define NGX_QUIC_HW_OFFLOAD					 1
+#define UDP_FRAMESIZE 291
+#define UDP_GET_IFINDEX 293
+#define UDP_QUIC_OFFLOAD 294
+#define UDP_QUIC_CLOSE 295
+#define UDP_QUIC_DCID_LEN 296
 
 typedef ngx_int_t (*ngx_quic_init_pt)(ngx_connection_t *c);
 typedef void (*ngx_quic_shutdown_pt)(ngx_connection_t *c);
@@ -82,6 +88,10 @@ typedef struct {
 
     ngx_flag_t                     retry;
     ngx_flag_t                     gso_enabled;
+#if NGX_QUIC_HW_OFFLOAD
+    ngx_flag_t                     tx_offload;
+    ngx_str_t                      offload_dev;
+#endif
     ngx_flag_t                     disable_active_migration;
     ngx_msec_t                     handshake_timeout;
     ngx_msec_t                     idle_timeout;

@@ -430,8 +430,15 @@ ngx_quic_send_segments(ngx_connection_t *c, u_char *buf, size_t len,
 #if (NGX_HAVE_ADDRINFO_CMSG)
     char             msg_control[CMSG_SPACE(sizeof(uint16_t))
                              + CMSG_SPACE(sizeof(ngx_addrinfo_t))];
+#elif (NGX_QUIC_HW_OFFLOAD)
+    char             msg_control[CMSG_SPACE(sizeof(uint16_t)) 
+	                     + CMSG_SPACE(sizeof(uint16_t))
+                             + CMSG_SPACE(sizeof(ngx_addrinfo_t))];
 #else
     char             msg_control[CMSG_SPACE(sizeof(uint16_t))];
+#endif
+#if NGX_QUIC_HW_OFFLOAD
+    ngx_quic_connection_t  *qc;
 #endif
 
     ngx_memzero(&msg, sizeof(struct msghdr));
@@ -460,11 +467,44 @@ ngx_quic_send_segments(ngx_connection_t *c, u_char *buf, size_t len,
     valp = (void *) CMSG_DATA(cmsg);
     *valp = segment;
 
+#if (NGX_QUIC_HW_OFFLOAD)
+    qc = ngx_quic_get_connection(c);
+    if (qc && qc->conf->tx_offload && qc->ofld.enable) {
+        cmsg = CMSG_NXTHDR(&msg, cmsg);
+
+        cmsg->cmsg_level = SOL_UDP;
+        cmsg->cmsg_type = UDP_QUIC_OFFLOAD;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+
+        clen += CMSG_SPACE(sizeof(uint16_t));
+
+        valp = (void *) CMSG_DATA(cmsg);
+        *valp = qc->ofld.short_hdr_xid;
+        /* Send dcid len */
+        cmsg = CMSG_NXTHDR(&msg, cmsg);
+
+        cmsg->cmsg_level = SOL_UDP;
+        cmsg->cmsg_type = UDP_QUIC_DCID_LEN;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+
+        clen += CMSG_SPACE(sizeof(uint16_t));
+
+        valp = (void *) CMSG_DATA(cmsg);
+        *valp = qc->path->cid->len;
+        goto skip_addrinfo;
+    }
+#endif
+
+
 #if (NGX_HAVE_ADDRINFO_CMSG)
     if (c->listening && c->listening->wildcard && c->local_sockaddr) {
         cmsg = CMSG_NXTHDR(&msg, cmsg);
         clen += ngx_set_srcaddr_cmsg(cmsg, c->local_sockaddr);
     }
+#endif
+
+#if NGX_QUIC_HW_OFFLOAD
+skip_addrinfo:
 #endif
 
     msg.msg_controllen = clen;
@@ -653,6 +693,16 @@ ngx_quic_output_packet(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
         return NGX_ERROR;
     }
 
+#if NGX_QUIC_HW_OFFLOAD
+    /* Chelsio_QUIC offload only short hdr packets long hdr will go via t4_tom NIC mode */
+    if (pkt.keys->tx_offload && ngx_quic_short_pkt(pkt.flags)) {
+        qc->ofld.short_hdr_xid = qc->ofld.xid;
+    }
+    else {
+        qc->ofld.short_hdr_xid = 0;
+    }
+#endif
+
     ctx->pnum++;
 
     if (pkt.need_ack) {
@@ -726,6 +776,13 @@ ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
     struct cmsghdr  *cmsg;
     char             msg_control[CMSG_SPACE(sizeof(ngx_addrinfo_t))];
 #endif
+#if (NGX_QUIC_HW_OFFLOAD)
+    struct cmsghdr  *cmsg_quic;
+    char             msg_control_quic[CMSG_SPACE(sizeof(uint16_t))];
+    size_t           clen;
+    uint16_t        *valp;
+    ngx_quic_connection_t  *qc;
+#endif
 
     ngx_memzero(&msg, sizeof(struct msghdr));
 
@@ -738,6 +795,27 @@ ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
     msg.msg_name = sockaddr;
     msg.msg_namelen = socklen;
 
+#if (NGX_QUIC_HW_OFFLOAD)
+    qc = ngx_quic_get_connection(c);
+    if (qc && qc->conf->tx_offload && qc->ofld.enable) {
+        ngx_memzero(msg_control_quic, sizeof(msg_control_quic));
+        msg.msg_control = msg_control_quic;
+        msg.msg_controllen = sizeof(msg_control_quic);
+
+        cmsg_quic = CMSG_FIRSTHDR(&msg);
+
+        cmsg_quic->cmsg_level = SOL_UDP;
+        cmsg_quic->cmsg_type = UDP_QUIC_OFFLOAD;
+        cmsg_quic->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+
+        clen = CMSG_SPACE(sizeof(uint16_t));
+
+        valp = (void *) CMSG_DATA(cmsg_quic);
+        *valp = qc->ofld.short_hdr_xid;
+        msg.msg_controllen = clen;
+        goto skip_addrinfo;
+    }
+#endif
 #if (NGX_HAVE_ADDRINFO_CMSG)
     if (c->listening && c->listening->wildcard && c->local_sockaddr) {
 
@@ -751,6 +829,9 @@ ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
     }
 #endif
 
+#if (NGX_QUIC_HW_OFFLOAD)
+skip_addrinfo:
+#endif
     n = ngx_sendmsg(c, &msg, 0);
     if (n < 0) {
         return n;

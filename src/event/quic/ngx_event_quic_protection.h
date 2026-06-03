@@ -64,6 +64,10 @@ struct ngx_quic_keys_s {
     ngx_quic_secrets_t        secrets[NGX_QUIC_ENCRYPTION_LAST];
     ngx_quic_secrets_t        next_key;
     ngx_uint_t                cipher;
+#if NGX_QUIC_HW_OFFLOAD
+    ngx_quic_md_t             ofld_key;
+    ngx_flag_t                tx_offload;
+#endif
 };
 
 

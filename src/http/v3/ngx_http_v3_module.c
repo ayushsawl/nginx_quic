@@ -64,6 +64,23 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.gso_enabled),
       NULL },
 
+#if NGX_QUIC_HW_OFFLOAD
+    { ngx_string("quic_tx_offload"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.tx_offload),
+      NULL },
+
+    { ngx_string("quic_offload_dev"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.offload_dev),
+      NULL },
+
+#endif
+
     { ngx_string("quic_host_key"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
       ngx_http_quic_host_key,
@@ -206,6 +223,11 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.max_concurrent_streams_uni = NGX_HTTP_V3_MAX_UNI_STREAMS;
     h3scf->quic.retry = NGX_CONF_UNSET;
     h3scf->quic.gso_enabled = NGX_CONF_UNSET;
+#if NGX_QUIC_HW_OFFLOAD
+    h3scf->quic.tx_offload = NGX_CONF_UNSET;
+    h3scf->quic.offload_dev.len = 0;
+    h3scf->quic.offload_dev.data = NULL;
+#endif
     h3scf->quic.stream_close_code = NGX_HTTP_V3_ERR_NO_ERROR;
     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
@@ -244,6 +266,10 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->quic.retry, prev->quic.retry, 0);
     ngx_conf_merge_value(conf->quic.gso_enabled, prev->quic.gso_enabled, 0);
 
+#if NGX_QUIC_HW_OFFLOAD
+    ngx_conf_merge_value(conf->quic.tx_offload, prev->quic.tx_offload, 0);
+    ngx_conf_merge_str_value(conf->quic.offload_dev, prev->quic.offload_dev, "");
+#endif
     ngx_conf_merge_str_value(conf->quic.host_key, prev->quic.host_key, "");
 
     ngx_conf_merge_uint_value(conf->quic.active_connection_id_limit,

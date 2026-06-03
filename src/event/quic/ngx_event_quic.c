@@ -10,6 +10,9 @@
 #include <ngx_sha1.h>
 #include <ngx_event_quic_connection.h>
 
+#if NGX_QUIC_HW_OFFLOAD
+#include "libchquic.h"
+#endif
 
 static ngx_quic_connection_t *ngx_quic_new_connection(ngx_connection_t *c,
     ngx_quic_conf_t *conf, ngx_quic_header_t *pkt);
@@ -347,6 +350,25 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     c->idle = 1;
     ngx_reusable_connection(c, 1);
 
+#if NGX_QUIC_HW_OFFLOAD
+    qc->ofld.xid = 0;
+    qc->ofld.rekey_cnt = 0;
+    qc->ofld.enable = 0;
+    qc->ofld.ifindex = 0;
+    ngx_explicit_memzero(qc->keys->ofld_key.data, NGX_QUIC_MAX_MD_SIZE);
+    qc->keys->ofld_key.len = 0;
+    qc->keys->tx_offload = qc->conf->tx_offload; // commendt AYUSH
+    if (qc->conf->tx_offload) {
+        int fs = qc->path->mtu;
+
+        /* Chelsio_QUIC Enable t4_tom */
+        if (setsockopt(c->listening->fd, IPPROTO_UDP, UDP_FRAMESIZE, &fs, sizeof(fs)) == 0)
+            qc->ofld.enable = 1;
+        else
+            ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+               "quic offload driver [t4_tom] enable failed");
+    }
+#endif
     ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
                    "quic connection created");
 
@@ -552,6 +574,23 @@ ngx_quic_close_connection(ngx_connection_t *c, ngx_int_t rc)
         qc->closing = 1;
     }
 
+#if NGX_QUIC_HW_OFFLOAD
+    /* Chelsio_QUIC Close connection and delete quic context in driver */
+    if (qc->conf->tx_offload) {
+        if (qc->ofld.xid) {
+            int fs = 0;
+
+            setsockopt(c->listening->fd, IPPROTO_UDP, UDP_QUIC_CLOSE, &fs, sizeof(fs));
+            lchquic_close_conn(qc->ofld.xid, qc->ofld.ifindex);
+            qc->ofld.xid = 0;
+            qc->ofld.rekey_cnt = 0;
+            qc->ofld.enable = 0;
+            qc->ofld.ifindex = 0;
+            ngx_explicit_memzero(qc->keys->ofld_key.data, NGX_QUIC_MAX_MD_SIZE);
+            qc->keys->ofld_key.len = 0;
+        }
+    }
+#endif
     if (rc == NGX_ERROR && qc->close.timer_set) {
         /* do not wait for timer in case of fatal error */
         ngx_del_timer(&qc->close);

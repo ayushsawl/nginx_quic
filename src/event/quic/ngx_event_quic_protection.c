@@ -717,6 +717,12 @@ ngx_quic_keys_set_encryption_secret(ngx_log_t *log, ngx_uint_t is_write,
         return NGX_ERROR;
     }
 
+#if NGX_QUIC_HW_OFFLOAD
+    if (keys->tx_offload && is_write) {
+        ngx_memcpy(keys->ofld_key.data, key.data, key.len);
+        keys->ofld_key.len = key.len;
+    }
+#endif
     if (ngx_quic_crypto_hp_init(ciphers.hp, peer_secret, log) == NGX_ERROR) {
         return NGX_ERROR;
     }
@@ -924,6 +930,15 @@ ngx_quic_create_packet(ngx_quic_header_t *pkt, ngx_str_t *res)
                    "quic ad len:%uz %xV", ad.len, &ad);
 #endif
 
+#if NGX_QUIC_HW_OFFLOAD
+    if (pkt->keys->tx_offload && ngx_quic_short_pkt(pkt->flags)
+        && pkt->level == NGX_QUIC_ENCRYPTION_APPLICATION)
+    {
+        /* Skipping Encryption */
+        memcpy(out.data, pkt->payload.data, pkt->payload.len);
+        goto skip_enc;
+    }
+#endif
     secret = &pkt->keys->secrets[pkt->level].server;
 
     ngx_memcpy(nonce, secret->iv.data, secret->iv.len);
@@ -947,7 +962,16 @@ ngx_quic_create_packet(ngx_quic_header_t *pkt, ngx_str_t *res)
         pnp[i] ^= mask[i + 1];
     }
 
+#if NGX_QUIC_HW_OFFLOAD
+skip_enc:
+#endif
     res->len = ad.len + out.len;
+#if 0
+    printf("INPUT tx pkt is \n");
+    for(i = 0;i < res->len; i++)
+	    printf("%x", res->data[i]);
+    printf("\n\n");
+#endif
 
     return NGX_OK;
 }

@@ -8,6 +8,10 @@
 #include <ngx_core.h>
 #include <ngx_event.h>
 #include <ngx_event_quic_connection.h>
+#if NGX_QUIC_HW_OFFLOAD
+#include "libchquic.h"
+#include <net/if.h>
+#endif
 
 
 /*
@@ -457,6 +461,28 @@ ngx_quic_set_encryption_secrets(ngx_ssl_conn_t *ssl_conn,
         qc->error = NGX_QUIC_ERR_INTERNAL_ERROR;
     }
 
+#if NGX_QUIC_HW_OFFLOAD
+    if (qc->conf->tx_offload && level == NGX_QUIC_ENCRYPTION_APPLICATION) {
+        int ifindex;
+        char ifname[IFNAMSIZ];
+        ngx_quic_secret_t   *secret;
+
+        ngx_memcpy(ifname, qc->conf->offload_dev.data, qc->conf->offload_dev.len);
+        ifname[qc->conf->offload_dev.len] = '\0';
+
+        ifindex = if_nametoindex(ifname);
+        qc->ofld.ifindex = ifindex;
+        secret = &qc->keys->secrets[level].server;
+
+        if (!qc->ofld.xid)
+            qc->ofld.xid = lchquic_send_key(ifindex, (unsigned char*)&qc->path->cid->id, qc->path->cid->len,
+                                           (unsigned char*)&secret->iv.data, secret->iv.len,
+                                           (unsigned char*)&secret->hp.data, secret->hp.len,
+                                           (unsigned char*)&qc->keys->ofld_key.data,
+					    qc->keys->ofld_key.len);
+        qc->ofld.rekey_cnt = 0;
+    }
+#endif
     return 1;
 }
 
